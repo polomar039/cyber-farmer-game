@@ -14,6 +14,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { soundManager } from './utils/SoundManager';
 import { getTelegramUser, supabase } from './utils/supabase';
+import { AlertTriangle, Terminal } from 'lucide-react';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -22,6 +23,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('FARM');
   const [tgUser, setTgUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   const [user, setUser] = useState<UserState>({
     balance: 100,
@@ -45,6 +47,51 @@ export default function App() {
     lastUpdated: Date.now()
   });
 
+  // --- HELPER: Load User Data ---
+  const loadUserData = async (telegramId: number, username: string, firstName: string) => {
+    try {
+      setErrorMsg(null);
+      // Check if user exists
+      const { data: existingUser, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('telegram_id', telegramId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
+      if (existingUser) {
+        // Load progress
+        setUser(prev => ({
+          ...prev,
+          balance: Number(existingUser.balance),
+          energy: existingUser.energy
+        }));
+      } else {
+        // Create new user
+        const { error: insertError } = await supabase
+          .from('users')
+          .insert({
+            telegram_id: telegramId,
+            username: username,
+            first_name: firstName,
+            balance: 100,
+            energy: 500
+          });
+        
+        if (insertError) throw insertError;
+      }
+      setTgUser({ id: telegramId, username, first_name: firstName });
+    } catch (e: any) {
+      console.error("Connection error:", e);
+      setErrorMsg(`DB Error: ${e.message || 'Unknown error'}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // --- INITIALIZATION ---
   useEffect(() => {
     const initGame = async () => {
@@ -56,50 +103,27 @@ export default function App() {
          window.Telegram.WebApp.expand();
          // @ts-ignore
          window.Telegram.WebApp.ready();
+         // @ts-ignore
+         window.Telegram.WebApp.disableVerticalSwipes(); 
       }
 
       if (tg) {
-        setTgUser(tg);
-        
-        // 2. Load/Create User in Supabase
-        try {
-          // Check if user exists
-          const { data: existingUser, error } = await supabase
-            .from('users')
-            .select('*')
-            .eq('telegram_id', tg.id)
-            .single();
-
-          if (existingUser) {
-            // Load progress
-            setUser(prev => ({
-              ...prev,
-              balance: Number(existingUser.balance),
-              energy: existingUser.energy
-            }));
-          } else {
-            // Create new user
-            const { error: insertError } = await supabase
-              .from('users')
-              .insert({
-                telegram_id: tg.id,
-                username: tg.username,
-                first_name: tg.first_name,
-                balance: 100,
-                energy: 500
-              });
-            
-            if (insertError) console.error("Error creating user:", insertError);
-          }
-        } catch (e) {
-          console.error("Connection error:", e);
-        }
+        await loadUserData(tg.id, tg.username || 'Anon', tg.first_name || 'Farmer');
+      } else {
+        // Not in Telegram (Browser Mode)
+        setIsLoading(false);
       }
-      setIsLoading(false);
     };
 
     initGame();
   }, []);
+
+  // --- DEV LOGIN ---
+  const handleDevLogin = () => {
+    setIsLoading(true);
+    // Use a random ID for testing or a fixed one (99999)
+    loadUserData(99999, 'DevUser', 'Tester');
+  };
 
   // --- AUTO-SAVE (Debounced) ---
   const saveTimeoutRef = useRef<any>(null);
@@ -270,9 +294,27 @@ export default function App() {
     <div className="min-h-screen bg-transparent text-gray-200 font-sans pb-20 selection:bg-cyber-primary selection:text-black">
       <Header user={user} />
       
-      {!tgUser && (
-        <div className="bg-yellow-500/10 border-b border-yellow-500/20 p-2 text-[10px] text-yellow-200 text-center font-mono">
-          ⚠️ DEMO MODE (Save disabled)
+      {/* Error Banner */}
+      {errorMsg && (
+        <div className="bg-red-500/20 border-b border-red-500 p-2 flex items-center justify-center text-[10px] text-red-200 font-mono">
+          <AlertTriangle size={12} className="mr-2" />
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Demo / Dev Mode Banner */}
+      {!tgUser && !isLoading && (
+        <div className="bg-yellow-500/10 border-b border-yellow-500/20 p-2 flex flex-col items-center justify-center gap-2">
+          <span className="text-[10px] text-yellow-200 font-mono text-center">
+            ⚠️ DEMO MODE (Browser)
+          </span>
+          <button 
+            onClick={handleDevLogin}
+            className="flex items-center gap-2 bg-yellow-500/20 px-3 py-1 rounded text-xs text-yellow-300 border border-yellow-500/40 hover:bg-yellow-500/30"
+          >
+            <Terminal size={12} />
+            Войти как Тестер (Проверка БД)
+          </button>
         </div>
       )}
 
