@@ -63,18 +63,31 @@ export default function App() {
       }
 
       if (existingUser) {
-        // Load progress including inventory
+        // Load basic stats
         setUser(prev => ({
           ...prev,
           balance: Number(existingUser.balance),
           energy: existingUser.energy
         }));
         
+        // Load inventory if exists
         if (existingUser.inventory) {
           setInventory(existingUser.inventory as InventoryItem[]);
         }
+
+        // Load plots if exists (This is the new part for cross-device growth)
+        if (existingUser.plots && (existingUser.plots as any[]).length > 0) {
+          setPlots(existingUser.plots as Plot[]);
+        }
       } else {
-        // Create new user
+        // Create new user with default plots
+        const defaultPlots = Array.from({ length: INITIAL_PLOTS }).map((_, i) => ({
+          id: `plot-${i}`,
+          crop: null,
+          plantedAt: null,
+          isUnlocked: i < 3 
+        }));
+
         const { error: insertError } = await supabase
           .from('users')
           .insert({
@@ -83,7 +96,8 @@ export default function App() {
             first_name: firstName,
             balance: 100,
             energy: 500,
-            inventory: []
+            inventory: [],
+            plots: defaultPlots
           });
         
         if (insertError) throw insertError;
@@ -129,7 +143,7 @@ export default function App() {
     loadUserData(99999, 'DevUser', 'Tester');
   };
 
-  // --- AUTO-SAVE (Includes Balance, Energy AND Inventory) ---
+  // --- AUTO-SAVE (Includes Balance, Energy, Inventory AND Plots) ---
   const saveTimeoutRef = useRef<any>(null);
   
   useEffect(() => {
@@ -143,13 +157,14 @@ export default function App() {
         .update({
           balance: user.balance,
           energy: user.energy,
-          inventory: inventory // Теперь сохраняем и склад
+          inventory: inventory,
+          plots: plots // Синхронизируем грядки каждые 2 секунды после изменений
         })
         .eq('telegram_id', tgUser.id);
     }, 2000);
 
     return () => clearTimeout(saveTimeoutRef.current);
-  }, [user.balance, user.energy, inventory, tgUser, isLoading]);
+  }, [user.balance, user.energy, inventory, plots, tgUser, isLoading]);
 
 
   // --- Logic Loops ---
@@ -189,7 +204,6 @@ export default function App() {
       const now = Date.now();
       setInventory(prev => {
         const fresh = prev.filter(item => item.expiresAt > now);
-        // Only update state if something actually spoiled to avoid unnecessary DB writes
         if (fresh.length !== prev.length) return fresh;
         return prev;
       });
@@ -281,8 +295,8 @@ export default function App() {
     return (
       <div className="min-h-screen bg-cyber-black flex items-center justify-center text-cyber-primary font-mono">
         <div className="animate-pulse text-center">
-          <div>ИНИЦИАЛИЗАЦИЯ КАНАЛА СВЯЗИ...</div>
-          <div className="text-[10px] mt-2 opacity-50">SYNCING WITH SUPABASE_NODE_01</div>
+          <div>СИНХРОНИЗАЦИЯ НЕЙРОПРОФИЛЯ...</div>
+          <div className="text-[10px] mt-2 opacity-50">DOWLINK: STABLE | UPLINK: READY</div>
         </div>
       </div>
     );
