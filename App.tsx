@@ -63,12 +63,16 @@ export default function App() {
       }
 
       if (existingUser) {
-        // Load progress
+        // Load progress including inventory
         setUser(prev => ({
           ...prev,
           balance: Number(existingUser.balance),
           energy: existingUser.energy
         }));
+        
+        if (existingUser.inventory) {
+          setInventory(existingUser.inventory as InventoryItem[]);
+        }
       } else {
         // Create new user
         const { error: insertError } = await supabase
@@ -78,7 +82,8 @@ export default function App() {
             username: username,
             first_name: firstName,
             balance: 100,
-            energy: 500
+            energy: 500,
+            inventory: []
           });
         
         if (insertError) throw insertError;
@@ -108,7 +113,7 @@ export default function App() {
       }
 
       if (tg) {
-        await loadUserData(tg.id, tg.username || 'Anon', tg.first_name || 'Farmer');
+        await loadUserData(tg.id, tg.username || 'Anon', tg.first_name || 'Michael');
       } else {
         // Not in Telegram (Browser Mode)
         setIsLoading(false);
@@ -121,17 +126,15 @@ export default function App() {
   // --- DEV LOGIN ---
   const handleDevLogin = () => {
     setIsLoading(true);
-    // Use a random ID for testing or a fixed one (99999)
     loadUserData(99999, 'DevUser', 'Tester');
   };
 
-  // --- AUTO-SAVE (Debounced) ---
+  // --- AUTO-SAVE (Includes Balance, Energy AND Inventory) ---
   const saveTimeoutRef = useRef<any>(null);
   
   useEffect(() => {
-    if (!tgUser) return;
+    if (!tgUser || isLoading) return;
 
-    // Clear previous timeout to avoid spamming DB
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
     saveTimeoutRef.current = setTimeout(async () => {
@@ -139,13 +142,14 @@ export default function App() {
         .from('users')
         .update({
           balance: user.balance,
-          energy: user.energy
+          energy: user.energy,
+          inventory: inventory // Теперь сохраняем и склад
         })
         .eq('telegram_id', tgUser.id);
-    }, 2000); // Save 2 seconds after last change
+    }, 2000);
 
     return () => clearTimeout(saveTimeoutRef.current);
-  }, [user.balance, user.energy, tgUser]);
+  }, [user.balance, user.energy, inventory, tgUser, isLoading]);
 
 
   // --- Logic Loops ---
@@ -185,7 +189,9 @@ export default function App() {
       const now = Date.now();
       setInventory(prev => {
         const fresh = prev.filter(item => item.expiresAt > now);
-        return fresh;
+        // Only update state if something actually spoiled to avoid unnecessary DB writes
+        if (fresh.length !== prev.length) return fresh;
+        return prev;
       });
     }, 5000);
     return () => clearInterval(timer);
@@ -213,8 +219,6 @@ export default function App() {
     
     if (user.energy < crop.energyCost) {
       soundManager.play('error');
-      // @ts-ignore
-      window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('error');
       return;
     }
     if (user.balance < crop.seedPrice) {
@@ -227,9 +231,6 @@ export default function App() {
       energy: u.energy - crop.energyCost,
       balance: u.balance - crop.seedPrice
     }));
-
-    // @ts-ignore
-    window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('medium');
 
     setPlots(prev => prev.map(p => {
       if (p.id === plotId) {
@@ -246,16 +247,13 @@ export default function App() {
         const newItem: InventoryItem = {
           id: generateId(),
           cropId: p.crop,
-          amount: 1 + Math.floor(Math.random()), 
+          amount: 1, 
           harvestedAt: Date.now(),
           expiresAt: Date.now() + crop.shelfLifeMs
         };
         
         setInventory(inv => [...inv, newItem]);
         setUser(u => ({ ...u, energy: Math.max(0, u.energy - 5) })); 
-        
-        // @ts-ignore
-        window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
 
         return { ...p, crop: null, plantedAt: null };
       }
@@ -273,9 +271,6 @@ export default function App() {
 
     setInventory(prev => prev.filter(item => !itemIds.includes(item.id)));
     setUser(u => ({ ...u, balance: u.balance + totalValue }));
-    
-    // @ts-ignore
-    window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success');
   };
 
   const handleBuyPlot = (plotId: string) => {
@@ -285,7 +280,10 @@ export default function App() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-cyber-black flex items-center justify-center text-cyber-primary font-mono">
-        <div className="animate-pulse">ЗАГРУЗКА НЕЙРОСЕТИ...</div>
+        <div className="animate-pulse text-center">
+          <div>ИНИЦИАЛИЗАЦИЯ КАНАЛА СВЯЗИ...</div>
+          <div className="text-[10px] mt-2 opacity-50">SYNCING WITH SUPABASE_NODE_01</div>
+        </div>
       </div>
     );
   }
@@ -294,7 +292,6 @@ export default function App() {
     <div className="min-h-screen bg-transparent text-gray-200 font-sans pb-20 selection:bg-cyber-primary selection:text-black">
       <Header user={user} />
       
-      {/* Error Banner */}
       {errorMsg && (
         <div className="bg-red-500/20 border-b border-red-500 p-2 flex items-center justify-center text-[10px] text-red-200 font-mono">
           <AlertTriangle size={12} className="mr-2" />
@@ -302,7 +299,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Demo / Dev Mode Banner */}
       {!tgUser && !isLoading && (
         <div className="bg-yellow-500/10 border-b border-yellow-500/20 p-2 flex flex-col items-center justify-center gap-2">
           <span className="text-[10px] text-yellow-200 font-mono text-center">
